@@ -2,6 +2,7 @@
 # Dynamic Branch Prediction Simulation
 
 ## Problem Definition
+
 This simulation explores the performance of various **dynamic branch prediction schemes** using the `sim-outorder` simulator from the **SimpleScalar toolset**. The goal is to develop a deeper understanding of how different prediction strategies impact processor performance, particularly in relation to control hazards in pipelines.
 
 The processor model used in this assignment mimics a simple, in-order CPU with the following configuration:
@@ -50,7 +51,11 @@ Applications from the SPEC95 benchmark suite are used as input, each precompiled
 The simulator did not provide a built-in static prediction mode where backward branches are predicted as taken and forward branches as not taken.
 
 **Solution:**  
-To implement static prediction, custom logic was added to the `bpred_lookup()` function in `bpred.c`. This logic determines the branch direction based on the comparison between the branch target address and the current instruction address (`btarget < baddr`). If the branch is backward, it is predicted as taken; otherwise, it is predicted as not taken.
+To implement this manually, I modified the `bpred_lookup()` function inside `bpred.c`. I added a condition to check the predictor class (`BPredStatic`) and used the branch target (`btarget`) compared to the branch address (`baddr`) to determine the direction of the branch.
+
+If the branch was backward (`btarget < baddr`), it was predicted as taken; otherwise, as not taken. The prediction result was also assigned to the `dir_update_ptr` fields for accurate tracking.
+
+This custom logic allowed static prediction to work as expected when selected in the simulator configuration.
 
 ```c
 if (!(MD_OP_FLAGS(op) & F_CTRL))
@@ -68,34 +73,18 @@ if (!(MD_OP_FLAGS(op) & F_CTRL))
     return baddr + sizeof(md_inst_t);  // Predict not taken
   }
 }
-### Problem 2: Branch Direction Statistics Not Displayed
+```
+### 🛠 Problem 2: Branch Direction Statistics Not Displayed
 
-**Issue:**
-
-While running simulations in the `sim-outorder` simulator from the SimpleScalar toolset, the output statistics did not include detailed classification of branches. Specifically, there were no counts for:
-
-- Forward branches that were taken or not taken
-- Backward branches that were taken or not taken
-- Whether these branches were executed or committed
-
-This information is critical for understanding and evaluating the effectiveness of branch prediction strategies.
-
----
+**Issue:**  
+The simulator did not display detailed statistics for forward and backward branches—specifically, how many were taken or not taken during both execution and commit stages. These metrics were essential for analyzing branch behavior in relation to prediction strategies.
 
 **Solution:**  
-
-To enable the simulator to track and print detailed branch statistics, new counters were added, initialized, updated during simulation, and registered for output in the statistics file.
-
----
-
-## 🔧 Implementation Steps
-
+To collect and report these statistics, the following steps were taken inside the file `sim-outorder.c` :
 
 #### 1. **Counters Defined**
 
-#### 1. **Counters Defined**
-
-Eight new counters were added to capture branch directions at execution and commit stages:
+Eight new counters were added to track forward/backward branches and their taken/not taken states, both during execution and commit:
 
 ```c
 static counter_t forward_branches_taken;
@@ -106,3 +95,72 @@ static counter_t committed_forward_taken;
 static counter_t committed_forward_not_taken;
 static counter_t committed_backward_taken; 
 static counter_t committed_backward_not_taken;
+```
+### 2. Counters Initialized
+
+All counters were initialized in `lsq_init()`:
+
+```c
+forward_branches_taken = 0;
+forward_branches_not_taken = 0; 
+backward_branches_taken = 0; 
+backward_branches_not_taken = 0; 
+committed_forward_taken = 0; 
+committed_forward_not_taken = 0; 
+committed_backward_taken = 0; 
+committed_backward_not_taken = 0;
+```
+### 3. Counting During Execution
+
+by comparing `target_PC` to `regs.regs_PC` to detect forward vs. backward branches.
+
+```c
+if (MD_OP_FLAGS(op) & F_CTRL) {
+  sim_total_branches++;
+  if (target_PC > regs.regs_PC) {
+    if (br_taken)
+     forward_branches_taken++;
+    else
+     forward_branches_not_taken++;
+  } else if (target_PC < regs.regs_PC) {
+    if (br_taken)
+     backward_branches_taken++;
+    else
+     backward_branches_not_taken++;
+  }
+}
+```
+### 4. Counting During Commit
+
+Similarly, committed branch directions were recorded when instructions were finalized:
+
+```c
+if (MD_OP_FLAGS(op) & F_CTRL) {
+  sim_num_branches++;
+  if (target_PC > regs.regs_PC) {
+    if (br_taken)
+     committed_forward_taken++;
+    else
+     committed_forward_not_taken++;
+  } else if (target_PC < regs.regs_PC) {
+    if (br_taken)
+     committed_backward_taken++;
+    else
+     committed_backward_not_taken++;
+  }
+}
+```
+### 5. Registering Statistics
+
+Finally, the counters were registered for output in the statistics report using `stat_reg_counter()`:
+
+```c
+stat_reg_counter(sdb, "forward_taken", "number of forward branches that were taken", &forward_branches_taken, 0, NULL);
+stat_reg_counter(sdb, "forward_not_taken", "number of forward branches that were not taken", &forward_branches_not_taken, 0, NULL);
+stat_reg_counter(sdb, "backward_taken", "number of backward branches that were taken", &backward_branches_taken, 0, NULL);
+stat_reg_counter(sdb, "backward_not_taken", "number of backward branches that were not taken", &backward_branches_not_taken, 0, NULL);
+stat_reg_counter(sdb, "committed_forward_taken", "number of committed forward branches that were taken", &committed_forward_taken, 0, NULL);
+stat_reg_counter(sdb, "committed_forward_not_taken", "number of committed forward branches that were not taken", &committed_forward_not_taken, 0, NULL);
+stat_reg_counter(sdb, "committed_backward_taken", "number of committed backward branches that were taken", &committed_backward_taken, 0, NULL);
+stat_reg_counter(sdb, "committed_backward_not_taken", "number of committed backward branches that were not taken", &committed_backward_not_taken, 0, NULL);
+```
